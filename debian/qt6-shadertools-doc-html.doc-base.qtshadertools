@@ -5,5 +5,5 @@ Abstract: This is the HTML documentation for Qt 6 shader tools
 Section: Programming/C++
 
 Format: HTML
-Index: /usr/share/doc/qt6-shadertools-doc-html/html/shadertools/qtshadertools.index
-Files: /usr/share/doc/qt6-shadertools-doc-html/html/shadertools/*.html
+Index: /usr/share/doc/qt6-shadertools-doc-html/html/qtshadertools/qtshadertools.index
+Files: /usr/share/doc/qt6-shadertools-doc-html/html/qtshadertools/*.html

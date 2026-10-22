@@ -1,5 +1,7 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
+
 
 #include "qshaderbaker.h"
 #include "qspirvcompiler_p.h"
@@ -7,6 +9,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDebug>
+#include <QMap>
 
 QT_BEGIN_NAMESPACE
 
@@ -123,7 +126,7 @@ QT_BEGIN_NAMESPACE
 struct QShaderBakerPrivate
 {
     bool readFile(const QString &fn);
-    QPair<QByteArray, QByteArray> compile();
+    std::pair<QByteArray, QByteArray> compile();
     QByteArray perTargetDefines(const QShaderBaker::GeneratedShader &key);
 
     QString sourceFileName;
@@ -138,6 +141,7 @@ struct QShaderBakerPrivate
     QSpirvShader::TessellationInfo tessInfo;
     QSpirvShader::MultiViewInfo multiViewInfo;
     QShaderBaker::SpirvOptions spirvOptions;
+    QShaderBaker::GlslOptions glslOptions;
     QSpirvCompiler compiler;
     QString errorMessage;
 };
@@ -150,6 +154,16 @@ bool QShaderBakerPrivate::readFile(const QString &fn)
         return false;
     }
     source = f.readAll();
+
+    // Remove UTF-8 BOM, if present. glslang fails otherwise, since the BOM is
+    // removed in glslangValidator (the command-line frontend), not in the
+    // compiler itself. Replicate that here.
+    if (source.size() >= 3) {
+        const unsigned char *p = reinterpret_cast<const unsigned char *>(source.constData());
+        if (p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF)
+            source.remove(0, 3);
+    }
+
     sourceFileName = fn;
     return true;
 }
@@ -185,6 +199,11 @@ QShaderBaker::~QShaderBaker()
     \li \c{.geom} - geometry shader
     \li \c{.comp} - compute shader
     \endlist
+
+    \warning \a fileName is expected to contain trusted content. Application
+    developers are advised to carefully consider the potential implications
+    before passing in user-provided source files that are not part of the
+    application.
  */
 void QShaderBaker::setSourceFileName(const QString &fileName)
 {
@@ -214,6 +233,11 @@ void QShaderBaker::setSourceFileName(const QString &fileName)
     Sets the name of the shader source file to \a fileName. This is the file
     that will be read when calling bake(). The shader stage is specified by \a
     stage.
+
+    \warning \a fileName is expected to contain trusted content. Application
+    developers are advised to carefully consider the potential implications
+    before passing in user-provided source files that are not part of the
+    application.
  */
 void QShaderBaker::setSourceFileName(const QString &fileName, QShader::Stage stage)
 {
@@ -225,6 +249,11 @@ void QShaderBaker::setSourceFileName(const QString &fileName, QShader::Stage sta
     Sets the source \a device. This allows using any QIODevice instead of just
     files. \a stage specifies the shader stage, while the optional \a fileName
     contains a filename that is used in the error messages.
+
+    \warning \a device is expected to contain trusted content. Application
+    developers are advised to carefully consider the potential implications
+    before passing in user-provided data from sources that are not under the
+    application's control.
  */
 void QShaderBaker::setSourceDevice(QIODevice *device, QShader::Stage stage, const QString &fileName)
 {
@@ -235,6 +264,11 @@ void QShaderBaker::setSourceDevice(QIODevice *device, QShader::Stage stage, cons
     Sets the input shader \a sourceString. \a stage specified the shader stage,
     while the optional \a fileName contains a filename that is used in the
     error messages.
+
+    \warning \a sourceString is expected to contain trusted content. Application
+    developers are advised to carefully consider the potential implications
+    before passing in user-provided data from sources that are not under the
+    application's control.
  */
 void QShaderBaker::setSourceString(const QByteArray &sourceString, QShader::Stage stage, const QString &fileName)
 {
@@ -246,7 +280,7 @@ void QShaderBaker::setSourceString(const QByteArray &sourceString, QShader::Stag
 /*!
     \typedef QShaderBaker::GeneratedShader
 
-    Synonym for QPair<QShader::Source, QShaderVersion>.
+    Synonym for std::pair<QShader::Source, QShaderVersion>.
 */
 
 /*!
@@ -472,17 +506,46 @@ void QShaderBaker::setMultiViewCount(int count)
     d->multiViewInfo.viewCount = count >= 2 ? count : 0;
 }
 
+/*!
+    \enum QShaderBaker::SpirvOption
+    \value GenerateFullDebugInfo Generate and store additional debug information in the SPIR-V binary.
+    \value StripDebugAndVarInfo Strip all debug and variable name information from the SPIR-V binary.
+ */
+
+/*!
+    Sets additional \a options for the generated SPIR-V binary.
+    By default no flags are set.
+ */
 void QShaderBaker::setSpirvOptions(SpirvOptions options)
 {
     d->spirvOptions = options;
 }
 
+/*!
+    \enum QShaderBaker::GlslOption
+    \value GlslEsFragDefaultFloatPrecisionMedium Emit \c{precision mediump float;} in fragment shaders for GLSL ES.
+ */
+
+/*!
+    Sets additional \a options for the generated GLSL and GLSL ES sources.
+    By default no flags are set.
+    \since 6.9
+ */
+void QShaderBaker::setGlslOptions(GlslOptions options)
+{
+    d->glslOptions = options;
+}
+
+#ifndef Q_OS_INTEGRITY // QTBUG-145990
+#ifndef QSHADERVERSION_IS_HASHABLE
 inline size_t qHash(const QShaderBaker::GeneratedShader &k, size_t seed = 0)
 {
     return qHash(k.first, seed) ^ k.second.version();
 }
+#endif
+#endif
 
-QPair<QByteArray, QByteArray> QShaderBakerPrivate::compile()
+std::pair<QByteArray, QByteArray> QShaderBakerPrivate::compile()
 {
     QSpirvCompiler::Flags flags;
     if (spirvOptions.testFlag(QShaderBaker::SpirvOption::GenerateFullDebugInfo))
@@ -567,10 +630,14 @@ QShader QShaderBaker::bake()
     // Normally one entry, for QShader::SpirvShader only. However, in
     // compile-per-target mode there is a separate SPIR-V binary generated for
     // each target (so for each GLSL/HLSL/MSL version requested).
-    QHash<GeneratedShader, QByteArray> spirv;
-    QHash<GeneratedShader, QByteArray> batchableSpirv;
+    // These are ordered maps, not hash tables, on purpose: the reflection info
+    // is generated from whichever binary comes first, and that must not depend
+    // on the (per-process randomized) QHash seed, otherwise the resulting
+    // QShader would not be reproducible from one run to another.
+    QMap<GeneratedShader, QByteArray> spirv;
+    QMap<GeneratedShader, QByteArray> batchableSpirv;
     const auto compileSpirvAndBatchable = [this, &spirv, &batchableSpirv](const GeneratedShader &key) {
-        const QPair<QByteArray, QByteArray> bin = d->compile();
+        const std::pair<QByteArray, QByteArray> bin = d->compile();
         if (bin.first.isEmpty())
             return false;
         spirv.insert(key, bin.first);
@@ -595,7 +662,7 @@ QShader QShaderBaker::bake()
     } else {
         // per-target compilation. the value here comes from the varying
         // preamble (and so preprocessor defines)
-        for (GeneratedShader req: d->reqVersions) {
+        for (GeneratedShader req: std::as_const(d->reqVersions)) {
             d->compiler.setPreamble(preamble + d->perTargetDefines(req));
             if (!compileSpirvAndBatchable(req))
                 return QShader();
@@ -624,8 +691,8 @@ QShader QShaderBaker::bake()
         bs.setDescription(batchableSpirvShader.shaderDescription());
     }
 
-    for (const GeneratedShader &req: d->reqVersions) {
-        for (const QShader::Variant &v : d->variants) {
+    for (const GeneratedShader &req: std::as_const(d->reqVersions)) {
+        for (const QShader::Variant &v : std::as_const(d->variants)) {
             if (d->stage != QShader::VertexStage) {
                 if (v == QShader::BatchableVertexShader
                         || v == QShader::UInt32IndexedVertexAsComputeShader
@@ -680,8 +747,11 @@ QShader QShaderBaker::bake()
             case QShader::GlslShader:
             {
                 QSpirvShader::GlslFlags flags;
-                if (req.second.flags().testFlag(QShaderVersion::GlslEs))
+                if (req.second.flags().testFlag(QShaderVersion::GlslEs)) {
                     flags |= QSpirvShader::GlslFlag::GlslEs;
+                    if (d->glslOptions.testFlag(GlslOption::GlslEsFragDefaultFloatPrecisionMedium))
+                        flags |= QSpirvShader::GlslFlag::EsFragDefaultFloatPrecisionMedium;
+                }
                 QVector<QSpirvShader::SeparateToCombinedImageSamplerMapping> separateToCombinedImageSamplerMappings;
                 shader.setShader(currentSpirvShader->translateToGLSL(req.second.version(),
                                                                      flags,
@@ -702,7 +772,7 @@ QShader QShaderBaker::bake()
                     QVector<QShaderDescription::InOutVariable> separateImages = desc.separateImages();
                     QVector<QShaderDescription::InOutVariable> separateSamplers = desc.separateSamplers();
                     QShader::SeparateToCombinedImageSamplerMappingList result;
-                    for (const QSpirvShader::SeparateToCombinedImageSamplerMapping &mapping : separateToCombinedImageSamplerMappings) {
+                    for (const QSpirvShader::SeparateToCombinedImageSamplerMapping &mapping : std::as_const(separateToCombinedImageSamplerMappings)) {
                         int textureBinding = -1;
                         int samplerBinding = -1;
                         for (int i = 0, count = separateImages.size(); i < count; ++i) {

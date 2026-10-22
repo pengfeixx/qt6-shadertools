@@ -1,5 +1,7 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
 
 #ifndef QSHADERBAKER_H
 #define QSHADERBAKER_H
@@ -30,6 +32,11 @@ public:
     };
     Q_DECLARE_FLAGS(SpirvOptions, SpirvOption)
 
+    enum class GlslOption {
+        GlslEsFragDefaultFloatPrecisionMedium = 0x01
+    };
+    Q_DECLARE_FLAGS(GlslOptions, GlslOption)
+
     QShaderBaker();
     ~QShaderBaker();
 
@@ -42,7 +49,7 @@ public:
     void setSourceString(const QByteArray &sourceString, QShader::Stage stage,
                          const QString &fileName = QString());
 
-    typedef QPair<QShader::Source, QShaderVersion> GeneratedShader;
+    using GeneratedShader = std::pair<QShader::Source, QShaderVersion>;
     void setGeneratedShaders(const QList<GeneratedShader> &v);
     void setGeneratedShaderVariants(const QList<QShader::Variant> &v);
 
@@ -55,6 +62,7 @@ public:
     void setMultiViewCount(int count);
 
     void setSpirvOptions(SpirvOptions options);
+    void setGlslOptions(GlslOptions options);
 
     QShader bake();
 
@@ -66,6 +74,7 @@ private:
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(QShaderBaker::SpirvOptions)
+Q_DECLARE_OPERATORS_FOR_FLAGS(QShaderBaker::GlslOptions)
 
 QT_END_NAMESPACE
 

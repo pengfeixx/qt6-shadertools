@@ -43,6 +43,9 @@
 #         versions. For the multiview versions the shading languages and versions are set automatically.
 #         Thus this is a simple drop-in option for existing qt_add_shaders() calls to get multiview versions
 #         generated. The additional, multiview qsb files will have a suffix of .mv2qsb.
+#     Specify MEDIUMP to inject "precision mediump float;" into GLSL ES fragment shaders instead of highp.
+#     Specify ORIGINAL_FILES with matching elements for each entry in FILES to use the given filename
+#     for dependency tracking (for DEPENDS and depfiles).
 #
 # The actual file name in the resource system is either :/PREFIX/FILES[i]-BASE+".qsb" or :/PREFIX/OUTPUTS[i]
 #
@@ -51,7 +54,7 @@
 # triggers an additional call to qsb in replace mode (only after the .qsb file is built by the initial run):
 #   qsb -r glsl,100es,my_custom_shader_for_gles.frag -r spirv,100,my_custom_spirv_binary.spv wobble.frag.qsb
 #
-# NB! Most of this is documented in qtshadertools-build.qdoc. Changes without updating the documentation
+# NB! Most of this is documented in qt_add_shaders.qdoc. Changes without updating the documentation
 # are not allowed.
 #
 # Example:
@@ -69,9 +72,9 @@
 function(_qt_internal_add_shaders_impl target resourcename)
     cmake_parse_arguments(
         arg
-        "BATCHABLE;PRECOMPILE;PERTARGETCOMPILE;NOGLSL;NOHLSL;NOMSL;DEBUGINFO;OPTIMIZED;SILENT;QUIET;TESSELLATION;MULTIVIEW;_QT_INTERNAL"
+        "BATCHABLE;PRECOMPILE;PERTARGETCOMPILE;NOGLSL;NOHLSL;NOMSL;DEBUGINFO;OPTIMIZED;SILENT;QUIET;TESSELLATION;MULTIVIEW;MEDIUMP;_QT_INTERNAL"
         "PREFIX;BASE;GLSL;HLSL;MSL;OUTPUT_TARGETS;TESSELLATION_VERTEX_COUNT;TESSELLATION_MODE;ZORDER_LOC;VIEW_COUNT"
-        "FILES;OUTPUTS;DEFINES"
+        "FILES;ORIGINAL_FILES;OUTPUTS;DEFINES"
         ${ARGN}
     )
 
@@ -80,13 +83,39 @@ function(_qt_internal_add_shaders_impl target resourcename)
     math(EXPR file_index "0")
     foreach(file_and_replacements IN LISTS arg_FILES)
         string(REPLACE "@" ";" file_and_replacement_list "${file_and_replacements}")
-        list(GET file_and_replacement_list 0 file)
-        list(LENGTH file_and_replacement_list replacement_count_plus_one)
+        list(LENGTH file_and_replacement_list segment_count)
         set(qsb_replace_args "")
-        if(replacement_count_plus_one GREATER 1)
-            math(EXPR replacement_count "${replacement_count_plus_one}-1")
-            foreach(replacement_idx RANGE 1 ${replacement_count})
-                list(GET file_and_replacement_list ${replacement_idx} replacement)
+        math(EXPR segment_max_idx "${segment_count}-1")
+
+        # Walk the @-split segments one by one, accumulating them into a
+        # candidate path. The first candidate ending with a known shader
+        # extension (.vert, .tesc, .tese, .geom, .frag, .comp) is the real
+        # filename; everything after it is the replacement specification.
+        # This handles paths that contain @ characters in directory or file names.
+        set(file "")
+        set(candidate "")
+        foreach(idx RANGE ${segment_max_idx})
+            list(GET file_and_replacement_list ${idx} segment)
+            if(candidate)
+                set(candidate "${candidate}@${segment}")
+            else()
+                set(candidate "${segment}")
+            endif()
+
+            if(candidate MATCHES "\\.(vert|tesc|tese|geom|frag|comp)$")
+                set(file "${candidate}")
+                break()
+            endif()
+        endforeach()
+
+        if(NOT file)
+            set(file "${file_and_replacements}")
+        elseif(NOT file STREQUAL file_and_replacements)
+            string(LENGTH "${file}" file_length)
+            math(EXPR remainder_start "${file_length}+1")
+            string(SUBSTRING "${file_and_replacements}" ${remainder_start} -1 remainder)
+            string(REPLACE "@" ";" replacement_specs "${remainder}")
+            foreach(replacement IN LISTS replacement_specs)
                 # Get a list, f.ex. "glsl;100es;some/where/shader.frag" so that we can
                 # adjust the filename (3rd component) to be absolute.
                 string(REPLACE "," ";" replacement_list "${replacement}")
@@ -111,16 +140,30 @@ function(_qt_internal_add_shaders_impl target resourcename)
         endif()
         set(qsb_result "${CMAKE_CURRENT_BINARY_DIR}/.qsb/${output_file}")
         get_filename_component(file_absolute ${file} ABSOLUTE)
-
-        if (NOT arg_SILENT AND NOT arg_QUIET)
-            message("${file} -> ${output_file} exposed as :${arg_PREFIX}/${output_file}")
+        set(original_file "${file_absolute}")
+        if(arg_ORIGINAL_FILES)
+            list(GET arg_ORIGINAL_FILES ${file_index} original_file_as_specified)
+            get_filename_component(original_file ${original_file_as_specified} ABSOLUTE)
         endif()
 
+        message(DEBUG "${file} -> ${output_file} exposed as :${arg_PREFIX}/${output_file}")
+
         set(qsb_args "")
+
+        # GL_OVR_multiview works best starting with these GLSL versions
+        set(multiview_glsl "330,300es")
 
         if (NOT arg_NOGLSL)
             if (arg_GLSL)
                 set(glsl_versions "${arg_GLSL}")
+                if (glsl_versions MATCHES "4[0-9]0|3[12]0")
+                    set(multiview_glsl ${arg_GLSL})
+                endif()
+            elseif(EMSCRIPTEN)
+                set(glsl_versions "100es,300es")
+            elseif(OHOS)
+                # OpenHarmony is GLES-only and requires a 300es variant.
+                set(glsl_versions "100es,300es")
             else()
                 set(glsl_versions "100es,120,150") # both 'es' and ' es' are accepted by qsb
             endif()
@@ -128,7 +171,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
             list(APPEND qsb_args "${glsl_versions}")
         endif()
 
-        if (NOT arg_NOHLSL)
+        if (NOT arg_NOHLSL AND NOT EMSCRIPTEN)
             if (arg_HLSL)
                 set(shader_model_versions "${arg_HLSL}")
             else()
@@ -138,7 +181,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
             list(APPEND qsb_args "${shader_model_versions}")
         endif()
 
-        if (NOT arg_NOMSL)
+        if (NOT arg_NOMSL AND NOT EMSCRIPTEN)
             if (arg_MSL)
                 set(metal_lang_versions "${arg_MSL}")
             else()
@@ -198,7 +241,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
             list(APPEND qsb_common_args "${arg_ZORDER_LOC}")
         endif()
 
-        if (arg_SILENT)
+        if (arg_SILENT OR arg_QUIET)
             list(APPEND qsb_common_args "-s")
         endif()
 
@@ -206,6 +249,15 @@ function(_qt_internal_add_shaders_impl target resourcename)
             list(APPEND qsb_common_args "-D")
             list(APPEND qsb_common_args "${qsb_def}")
         endforeach()
+
+        if (arg_MEDIUMP)
+            list(APPEND qsb_common_args "--mediump")
+        endif()
+
+        if(arg_ORIGINAL_FILES)
+            list(APPEND qsb_common_args "--orig-file")
+            list(APPEND qsb_common_args "${original_file}")
+        endif()
 
         list(APPEND qsb_args "${qsb_common_args}")
 
@@ -224,7 +276,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
 
         if (qsb_replace_args)
             list(APPEND qsb_replace_args "${qsb_result}")
-            if (arg_SILENT)
+            if (arg_SILENT OR arg_QUIET)
                 list(APPEND qsb_replace_args "-s")
             endif()
             add_custom_command(
@@ -236,6 +288,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
                     ${QT_CMAKE_EXPORT_NAMESPACE}::qsb ${qsb_replace_args}
                 DEPENDS
                     "${file_absolute}"
+                    "${original_file}"
                     ${QT_CMAKE_EXPORT_NAMESPACE}::qsb
                 ${depfile_extra_args}
                 VERBATIM
@@ -248,6 +301,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
                     ${QT_CMAKE_EXPORT_NAMESPACE}::qsb ${qsb_args}
                 DEPENDS
                     "${file_absolute}"
+                    "${original_file}"
                     ${QT_CMAKE_EXPORT_NAMESPACE}::qsb
                 ${depfile_extra_args}
                 VERBATIM
@@ -262,14 +316,13 @@ function(_qt_internal_add_shaders_impl target resourcename)
             # Add a pre-defined suffix to the output filename.
             set(qsb_multiview2_result "${CMAKE_CURRENT_BINARY_DIR}/.qsb/${output_file}.mv2qsb")
             set(qsb_multiview2_args "")
-            # GL_OVR_multiview works best starting with these GLSL versions
             list(APPEND qsb_multiview2_args "--glsl")
-            list(APPEND qsb_multiview2_args "330,300es")
+            list(APPEND qsb_multiview2_args "${multiview_glsl}")
             # view instancing needs Shader Model 6.1
             list(APPEND qsb_multiview2_args "--hlsl")
             list(APPEND qsb_multiview2_args "61")
             list(APPEND qsb_multiview2_args "--msl")
-            list(APPEND qsb_multiview2_args "12")
+            list(APPEND qsb_multiview2_args "21")
             list(APPEND qsb_multiview2_args "--view-count")
             list(APPEND qsb_multiview2_args "2")
             list(APPEND qsb_multiview2_args "${qsb_common_args}")
@@ -292,6 +345,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
                     ${QT_CMAKE_EXPORT_NAMESPACE}::qsb ${qsb_multiview2_args}
                 DEPENDS
                     "${file_absolute}"
+                    "${original_file}"
                     ${QT_CMAKE_EXPORT_NAMESPACE}::qsb
                 ${depfile_extra_args}
                 VERBATIM

@@ -1,5 +1,7 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
 
 #ifndef QSPIRVSHADER_P_H
 #define QSPIRVSHADER_P_H
@@ -28,7 +30,7 @@ public:
     enum class GlslFlag {
         GlslEs = 0x01,
         FixClipSpace = 0x02,
-        FragDefaultMediump = 0x04
+        EsFragDefaultFloatPrecisionMedium = 0x04
     };
     Q_DECLARE_FLAGS(GlslFlags, GlslFlag)
 

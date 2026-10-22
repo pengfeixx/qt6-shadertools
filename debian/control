@@ -1,32 +1,32 @@
 Source: qt6-shadertools
 Section: libs
-Priority: optional
 Maintainer: Debian Qt/KDE Maintainers <debian-qt-kde@lists.debian.org>
 Uploaders: Patrick Franz <deltaone@debian.org>,
-Build-Depends: cmake (>= 3.24~),
-               debhelper-compat (= 13),
+Build-Depends: debhelper-compat (= 13),
+               dh-sequence-pkgkde-symbolshelper,
+               cmake (>= 3.24~),
                libgl-dev,
                libvulkan-dev [linux-any],
                ninja-build,
-               pkg-config,
                pkg-kde-tools,
-               qt6-base-dev (>= 6.8.0+dfsg~),
-               qt6-base-private-dev (>= 6.8.0+dfsg~),
+               pkgconf,
+               qt6-base-dev (>= 6.11.2+dfsg~),
+               qt6-base-private-dev (>= 6.11.2+dfsg~),
                qt6-shader-baker <cross>,
                qt6-shadertools-dev:native <cross>,
-Build-Depends-Indep: qt6-base-dev (>= 6.8~) <!nodoc>,
-                     qt6-documentation-tools (>= 6.8~) <!nodoc>,
-Standards-Version: 4.6.2
+Build-Depends-Indep: qt6-base-dev (>= 6.11~) <!nodoc>,
+                     qt6-documentation-tools (>= 6.11~) <!nodoc>,
+Standards-Version: 4.7.4
 Homepage: https://www.qt.io/developers/
-Rules-Requires-Root: no
 Vcs-Git: https://salsa.debian.org/qt-kde-team/qt6/qt6-shadertools.git
 Vcs-Browser: https://salsa.debian.org/qt-kde-team/qt6/qt6-shadertools
 
 Package: libqt6shadertools6
 Architecture: any
 Multi-Arch: same
-Provides: qt6-shadertools-private-abi (= 6.8.0),
-Depends: ${misc:Depends}, ${shlibs:Depends},
+Provides: qt6-shadertools-private-abi (= 6.12.0)
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
 Description: Qt 6 shader tools module
  Qt is a cross-platform C++ application framework. Qt's primary feature
  is its rich set of widgets that provide standard GUI functionality.
@@ -37,7 +37,9 @@ Description: Qt 6 shader tools module
 Package: qt6-shader-baker
 Architecture: any
 Multi-Arch: foreign
-Depends: ${misc:Depends}, ${shlibs:Depends},
+Depends: spirv-tools,
+         ${misc:Depends},
+         ${shlibs:Depends},
 Description: Qt 6 shader baker
  Qt is a cross-platform C++ application framework. Qt's primary feature
  is its rich set of widgets that provide standard GUI functionality.
@@ -45,15 +47,12 @@ Description: Qt 6 shader baker
  This package contains the Qt Shader Baker tool.
 
 Package: qt6-shadertools-dev
-Provides: libqt6shadertools6-dev (= ${binary:Version}),
 Section: libdevel
 Architecture: any
 Multi-Arch: same
 Depends: libqt6shadertools6 (= ${binary:Version}),
          qt6-shader-baker (= ${binary:Version}),
          ${misc:Depends},
-Breaks: libqt6shadertools6-dev (<< 6.4.1-1~),
-Replaces: libqt6shadertools6-dev (<< 6.4.1-1~),
 Description: Qt 6 shader tools module - development files
  Qt is a cross-platform C++ application framework. Qt's primary feature
  is its rich set of widgets that provide standard GUI functionality.
@@ -62,9 +61,11 @@ Description: Qt 6 shader tools module - development files
  using the QtShaderTools library.
 
 Package: qt6-shadertools-doc
+Build-Profiles: <!nodoc>
 Architecture: all
 Section: doc
-Depends: qt6-base-doc, ${misc:Depends},
+Depends: qt6-base-doc,
+         ${misc:Depends},
 Multi-Arch: foreign
 Description: Qt 6 shader tools documentation
  Qt is a cross-platform C++ application framework. Qt's primary feature
@@ -73,9 +74,11 @@ Description: Qt 6 shader tools documentation
  This package contains the documentation for the Qt 6 shader tools.
 
 Package: qt6-shadertools-doc-html
+Build-Profiles: <!nodoc>
 Architecture: all
 Section: doc
-Depends: qt6-base-doc-html, ${misc:Depends},
+Depends: qt6-base-doc-html,
+         ${misc:Depends},
 Multi-Arch: foreign
 Description: Qt 6 shader tools HTML documentation
  Qt is a cross-platform C++ application framework. Qt's primary feature
@@ -84,9 +87,11 @@ Description: Qt 6 shader tools HTML documentation
  This package contains the HTML documentation for the Qt 6 shader tools.
 
 Package: qt6-shadertools-doc-dev
+Build-Profiles: <!nodoc>
 Architecture: all
 Section: libdevel
-Depends: qt6-base-doc-dev, ${misc:Depends},
+Depends: qt6-base-doc-dev,
+         ${misc:Depends},
 Multi-Arch: foreign
 Description: Qt 6 shadertools tags files
  Qt is a cross-platform C++ application framework. Qt's primary feature

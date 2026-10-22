@@ -35,6 +35,7 @@ private slots:
     void hlslNativeBindingMap();
     void reflectArraysOfSamplers();
     void perTargetCompileMode();
+    void perTargetCompileModeReproducible();
     void serializeDeserialize();
     void spirvOptions();
     void separateImagesAndSamplers();
@@ -46,6 +47,8 @@ private slots:
     void storageBufferRuntimeArrayStride();
     void storageBufferQualifiers();
     void multiview();
+    void mediump();
+    void geometryShader();
 };
 
 void tst_QShaderBaker::initTestCase()
@@ -317,6 +320,10 @@ void tst_QShaderBaker::compileError()
 void tst_QShaderBaker::translateError()
 {
     // assume the shader here fails in SPIRV-Cross with "cbuffer cannot be expressed with either HLSL packing layout or packoffset"
+    //
+    // This has been improved in SPIRV-Cross, presumably by 0ac65a353e94e9756e8b89fa74e953c482a915e0, so skip this test.
+    QSKIP("Not applicable with updated SPIRV-Cross");
+
     QShaderBaker baker;
     baker.setSourceFileName(QLatin1String(":/data/hlsl_cbuf_error.frag"));
     baker.setGeneratedShaderVariants({ QShader::StandardShader });
@@ -665,7 +672,7 @@ void tst_QShaderBaker::mslNativeBindingMap()
     QVERIFY(nativeBindingMap.contains(2)); // same
 
     // MSL has per-resource namespaces
-    QPair<int, int> nativeBindingPair = nativeBindingMap.value(0);
+    std::pair<int, int> nativeBindingPair = nativeBindingMap.value(0);
     QCOMPARE(nativeBindingPair.first, 0); // uniform buffer
 
     nativeBindingPair = nativeBindingMap.value(1);
@@ -677,8 +684,9 @@ void tst_QShaderBaker::mslNativeBindingMap()
     QCOMPARE(nativeBindingPair.second, 1); // sampler
 
     baker.setSourceFileName(QLatin1String(":/data/manyresources.frag"));
-    targets = { { QShader::SpirvShader, QShaderVersion(100) },
-                { QShader::MslShader, QShaderVersion(12) } };
+    targets.clear();
+    targets.append({ QShader::SpirvShader, QShaderVersion(100) });
+    targets.append({ QShader::MslShader, QShaderVersion(12) });
     baker.setGeneratedShaders(targets);
     s = baker.bake();
     QVERIFY(s.isValid());
@@ -886,6 +894,59 @@ void tst_QShaderBaker::perTargetCompileMode()
     QVERIFY(s.isValid());
     QVERIFY(baker.errorMessage().isEmpty());
     QCOMPARE(s.availableShaders().size(), 2);
+}
+
+void tst_QShaderBaker::perTargetCompileModeReproducible()
+{
+    // In per-target compilation mode there is one SPIR-V binary per target, and
+    // the single QShaderDescription of the resulting QShader has to be generated
+    // from one of them. Which one that is must not vary between bakes, not even
+    // when the reflection info differs per target (which it can, when the source
+    // declares its resources based on the QSHADER_* macros).
+
+    QShaderBaker baker;
+    baker.setSourceFileName(QLatin1String(":/data/color_pertarget_reflect.vert"));
+    baker.setGeneratedShaderVariants({
+                                         QShader::StandardShader,
+                                         QShader::BatchableVertexShader
+                                     });
+    QList<QShaderBaker::GeneratedShader> targets;
+    targets.append({ QShader::SpirvShader, QShaderVersion(100) });
+    targets.append({ QShader::GlslShader, QShaderVersion(100, QShaderVersion::GlslEs) });
+    targets.append({ QShader::GlslShader, QShaderVersion(330) });
+    targets.append({ QShader::HlslShader, QShaderVersion(50) });
+    targets.append({ QShader::MslShader, QShaderVersion(12) });
+    baker.setGeneratedShaders(targets);
+    baker.setPerTargetCompilation(true);
+
+    QByteArray reference;
+    for (int i = 0; i < 8; ++i) {
+        // Get a different QHash seed on every round. Picking the SPIR-V binary
+        // to reflect on out of a QHash would make the result depend on this.
+        QHashSeed::resetRandomGlobalSeed();
+
+        QShader s = baker.bake();
+        if (!s.isValid())
+            qDebug() << baker.errorMessage();
+        QVERIFY(s.isValid());
+        QVERIFY(baker.errorMessage().isEmpty());
+        QCOMPARE(s.availableShaders().size(), 2 * 5);
+
+        // The plain SPIR-V target is the one that wins, so the uniform block
+        // must have the single mat4 member and nothing else.
+        const QList<QShaderDescription::UniformBlock> blocks = s.description().uniformBlocks();
+        QCOMPARE(blocks.size(), 1);
+        QCOMPARE(blocks[0].members.size(), 1);
+        QCOMPARE(blocks[0].members[0].name, QByteArrayLiteral("mvp"));
+
+        // and the whole thing must serialize to the exact same bytes every time
+        const QByteArray serialized = s.serialized();
+        QVERIFY(!serialized.isEmpty());
+        if (reference.isEmpty())
+            reference = serialized;
+        else
+            QCOMPARE(serialized, reference);
+    }
 }
 
 void tst_QShaderBaker::serializeDeserialize()
@@ -1164,7 +1225,7 @@ void tst_QShaderBaker::tessellationCompile()
 
     // the uniform buffer binding -> Metal buffer index mapping
     QCOMPARE(s.nativeResourceBindingMap(QShaderKey(QShader::MslShader, QShaderVersion(12))).size(), 1);
-    QCOMPARE(s.nativeResourceBindingMap(QShaderKey(QShader::MslShader, QShaderVersion(12))).value(0), qMakePair(0, -1));
+    QCOMPARE(s.nativeResourceBindingMap(QShaderKey(QShader::MslShader, QShaderVersion(12))).value(0), std::make_pair(0, -1));
 
     QVERIFY(s.shader(QShaderKey(QShader::MslShader, QShaderVersion(12))).shader().contains(QByteArrayLiteral("[[ patch(triangle, 3) ]]")));
 }
@@ -1403,6 +1464,69 @@ void tst_QShaderBaker::multiview()
     QVERIFY(s.isValid());
     QVERIFY(baker.errorMessage().isEmpty());
 }
+
+void tst_QShaderBaker::mediump()
+{
+    QShaderBaker baker;
+    baker.setSourceFileName(QLatin1String(":/data/color.vert"));
+    baker.setGeneratedShaderVariants({ QShader::StandardShader });
+    QList<QShaderBaker::GeneratedShader> targets;
+    targets.append({ QShader::SpirvShader, QShaderVersion(100) });
+    targets.append({ QShader::GlslShader, QShaderVersion(100, QShaderVersion::GlslEs) });
+    targets.append({ QShader::GlslShader, QShaderVersion(120) });
+    targets.append({ QShader::HlslShader, QShaderVersion(50) });
+    targets.append({ QShader::MslShader, QShaderVersion(12) });
+
+    baker.setGlslOptions(QShaderBaker::GlslOption::GlslEsFragDefaultFloatPrecisionMedium);
+
+    baker.setGeneratedShaders(targets);
+    QShader s = baker.bake();
+    QVERIFY(s.isValid());
+    QVERIFY(baker.errorMessage().isEmpty());
+    QCOMPARE(s.availableShaders().size(), 5);
+    QShaderCode shader = s.shader(QShaderKey(QShader::GlslShader, QShaderVersion(100, QShaderVersion::GlslEs)));
+    QVERIFY(!shader.shader().isEmpty());
+    QVERIFY(!shader.shader().contains("precision ")); // no effect for vertex shaders
+
+    baker.setSourceFileName(QLatin1String(":/data/color.frag"));
+
+    s = baker.bake();
+    QVERIFY(s.isValid());
+    QVERIFY(baker.errorMessage().isEmpty());
+    QCOMPARE(s.availableShaders().size(), 5);
+    shader = s.shader(QShaderKey(QShader::GlslShader, QShaderVersion(100, QShaderVersion::GlslEs)));
+    QVERIFY(!shader.shader().isEmpty());
+    QVERIFY(shader.shader().contains("precision mediump float;"));
+
+    // back to defaults
+    baker.setGlslOptions({});
+    s = baker.bake();
+    QVERIFY(s.isValid());
+    QVERIFY(baker.errorMessage().isEmpty());
+    QCOMPARE(s.availableShaders().size(), 5);
+    shader = s.shader(QShaderKey(QShader::GlslShader, QShaderVersion(100, QShaderVersion::GlslEs)));
+    QVERIFY(!shader.shader().isEmpty());
+    QVERIFY(shader.shader().contains("precision highp float;"));
+}
+
+void tst_QShaderBaker::geometryShader()
+{
+    QShaderBaker baker;
+    baker.setSourceFileName(QLatin1String(":/data/voxelize.geom"));
+    baker.setGeneratedShaderVariants({ QShader::StandardShader });
+    QList<QShaderBaker::GeneratedShader> targets;
+    targets.append({ QShader::SpirvShader, QShaderVersion(100) });
+    targets.append({ QShader::GlslShader, QShaderVersion(410) });
+    targets.append({ QShader::GlslShader, QShaderVersion(320, QShaderVersion::GlslEs) });
+    targets.append({ QShader::HlslShader, QShaderVersion(50) });
+    baker.setGeneratedShaders(targets);
+    QShader s = baker.bake();
+    QVERIFY(s.isValid());
+    QVERIFY(s.stage() == QShader::GeometryStage);
+    QVERIFY(baker.errorMessage().isEmpty());
+    QCOMPARE(s.availableShaders().size(), 4);
+}
+
 
 #include <tst_qshaderbaker.moc>
 QTEST_MAIN(tst_QShaderBaker)
